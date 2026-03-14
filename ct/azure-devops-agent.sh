@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
+
 # Copyright (c) 2025 Azure4DevOps
 # Author: Azure4DevOps
 # License: MIT
 # Source: https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/linux-agent
+
+# ── Override the base URL so build.func fetches OUR install script ────────────
+COMMUNITY_SCRIPTS_URL="https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main"
+
+source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 
 APP="Azure DevOps Agent"
 var_tags="devops;cicd;azure"
@@ -13,9 +18,6 @@ var_disk="10"
 var_os="ubuntu"
 var_version="24.04"
 var_unprivileged="1"
-
-# Raw base URL of THIS fork — build.func appends /install/<scriptname>-install.sh
-REPO_BASE="https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main"
 
 header_info "$APP"
 variables
