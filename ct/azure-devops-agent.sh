@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
-# Copyright (c) 2025 community-scripts ORG
-# Author: community-scripts
-# License: MIT | https://github.com/community-scripts/ProxmoxVE/raw/main/LICENSE
+# Copyright (c) 2025 Azure4DevOps
+# Author: Azure4DevOps
+# License: MIT
 # Source: https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/linux-agent
 
 APP="Azure DevOps Agent"
@@ -14,9 +14,8 @@ var_os="ubuntu"
 var_version="24.04"
 var_unprivileged="1"
 
-# ── Point this at the raw URL of YOUR install script once hosted on GitHub ────
-# Example: https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/install/azure-devops-agent-install.sh
-INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
+# Raw base URL of THIS fork — build.func appends /install/<scriptname>-install.sh
+REPO_BASE="https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main"
 
 header_info "$APP"
 variables
@@ -34,7 +33,8 @@ function update_script() {
   fi
 
   CURRENT=$(cat /opt/azdo-agent_version.txt 2>/dev/null || echo "unknown")
-  RELEASE=$(curl -fsSL https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest | grep "tag_name" | cut -d '"' -f4 | sed 's/^v//')
+  RELEASE=$(curl -fsSL https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest \
+    | grep "tag_name" | cut -d '"' -f4 | sed 's/^v//')
 
   if [[ "$RELEASE" == "$CURRENT" ]]; then
     msg_ok "Already on latest version: v${RELEASE}"
@@ -59,10 +59,10 @@ function update_script() {
   msg_ok "Extracted agent"
 
   msg_info "Preserving configuration"
-  cp /opt/azdo-agent/.agent /opt/azdo-agent-new/ 2>/dev/null || true
+  cp /opt/azdo-agent/.agent       /opt/azdo-agent-new/ 2>/dev/null || true
   cp /opt/azdo-agent/.credentials /opt/azdo-agent-new/ 2>/dev/null || true
-  cp /opt/azdo-agent/.env /opt/azdo-agent-new/ 2>/dev/null || true
-  cp /opt/azdo-agent/.service /opt/azdo-agent-new/ 2>/dev/null || true
+  cp /opt/azdo-agent/.env         /opt/azdo-agent-new/ 2>/dev/null || true
+  cp /opt/azdo-agent/.service     /opt/azdo-agent-new/ 2>/dev/null || true
   msg_ok "Configuration preserved"
 
   msg_info "Swapping agent binaries"
