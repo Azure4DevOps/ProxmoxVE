@@ -1,25 +1,33 @@
 #!/usr/bin/env bash
-
 # Copyright (c) 2025 Azure4DevOps
 # Author: Azure4DevOps
 # License: MIT
 # Source: https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/linux-agent
+#
+# Fully self-contained — no dependency on FUNCTIONS_FILE_PATH or install.func
+# Can be run directly:  bash <(curl -fsSL https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main/install/azure-devops-agent-install.sh)
 
-# build.func exports FUNCTIONS_FILE_PATH with install.func content pre-loaded
-# This is the correct pattern - do NOT curl install.func manually
-source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
+set -euo pipefail
 
-# ─── OS / package bootstrap ───────────────────────────────────────────────────
-color
-verb_ip6
-catch_errors
-setting_up_container
-network_check
-update_os
+# ─── Inline helpers (replaces install.func) ───────────────────────────────────
+RED='\033[0;31m'; YW='\033[33m'; GN='\033[1;32m'; CL='\033[m'; BFR='\r\033[K'; HOLD=' '
+CM="${GN}✔${CL}"; CROSS="${RED}✖${CL}"
+
+msg_info()  { echo -ne " ${HOLD} ${YW}${1}...${CL}"; }
+msg_ok()    { echo -e "${BFR} ${CM} ${GN}${1}${CL}"; }
+msg_error() { echo -e "${BFR} ${CROSS} ${RED}${1}${CL}"; exit 1; }
+
+STD=">/dev/null 2>&1"   # used as: eval "command $STD"  — but we'll just pipe directly
+
+# ─── OS bootstrap ─────────────────────────────────────────────────────────────
+msg_info "Updating OS"
+apt-get update -qq
+apt-get upgrade -y -qq
+msg_ok "Updated OS"
 
 # ─── Dependencies ─────────────────────────────────────────────────────────────
 msg_info "Installing dependencies"
-$STD apt-get install -y \
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
   curl wget git jq unzip \
   apt-transport-https ca-certificates gnupg lsb-release \
   libicu-dev libkrb5-3 zlib1g libssl3 \
@@ -30,14 +38,15 @@ msg_ok "Installed dependencies"
 msg_info "Installing Docker CLI"
 install -m 0755 -d /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
 chmod a+r /etc/apt/keyrings/docker.gpg
 echo \
   "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
   https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
   | tee /etc/apt/sources.list.d/docker.list >/dev/null
-$STD apt-get update
-$STD apt-get install -y docker-ce-cli docker-buildx-plugin docker-compose-plugin
+apt-get update -qq
+DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+  docker-ce-cli docker-buildx-plugin docker-compose-plugin
 msg_ok "Installed Docker CLI"
 
 # ─── Service account ──────────────────────────────────────────────────────────
@@ -46,41 +55,54 @@ if ! id -u azdo-agent &>/dev/null; then
   useradd -r -m -d /home/azdo-agent -s /bin/bash azdo-agent
 fi
 usermod -aG docker azdo-agent 2>/dev/null || true
-echo "azdo-agent ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg" \
-  >/etc/sudoers.d/azdo-agent
+cat > /etc/sudoers.d/azdo-agent <<'EOF'
+azdo-agent ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt, /usr/bin/dpkg
+EOF
 chmod 0440 /etc/sudoers.d/azdo-agent
 msg_ok "Created azdo-agent service account"
 
 # ─── Download latest agent ────────────────────────────────────────────────────
 msg_info "Fetching latest Azure Pipelines agent release"
-RELEASE=$(curl -fsSL https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest \
+RELEASE=$(curl -fsSL \
+  "https://api.github.com/repos/microsoft/azure-pipelines-agent/releases/latest" \
   | jq -r '.tag_name' | sed 's/^v//')
-TARBALL="vsts-agent-linux-x64-${RELEASE}.tar.gz"
-DOWNLOAD_URL="https://vstsagentpackage.azureedge.net/agent/${RELEASE}/${TARBALL}"
+if [[ -z "$RELEASE" ]]; then
+  msg_error "Could not determine latest agent release from GitHub API"
+fi
 msg_ok "Latest release: v${RELEASE}"
 
+TARBALL="vsts-agent-linux-x64-${RELEASE}.tar.gz"
+DOWNLOAD_URL="https://vstsagentpackage.azureedge.net/agent/${RELEASE}/${TARBALL}"
+
 msg_info "Downloading Azure DevOps Agent v${RELEASE}"
-wget -qO "/tmp/${TARBALL}" "${DOWNLOAD_URL}"
+wget --retry-connrefused --waitretry=5 --tries=3 --timeout=60 \
+  -q --show-progress \
+  -O "/tmp/${TARBALL}" "${DOWNLOAD_URL}"
+
+# Verify the tarball is valid before extracting
+if ! gzip -t "/tmp/${TARBALL}" 2>/dev/null; then
+  msg_error "Downloaded tarball is corrupt or incomplete: /tmp/${TARBALL}"
+fi
 msg_ok "Downloaded ${TARBALL}"
 
 # ─── Extract ──────────────────────────────────────────────────────────────────
 msg_info "Extracting agent to /opt/azdo-agent"
 mkdir -p /opt/azdo-agent
 tar -xzf "/tmp/${TARBALL}" -C /opt/azdo-agent
-rm "/tmp/${TARBALL}"
+rm -f "/tmp/${TARBALL}"
 chown -R azdo-agent:azdo-agent /opt/azdo-agent
 msg_ok "Extracted agent"
 
 # ─── Runtime dependencies (Microsoft script) ──────────────────────────────────
 msg_info "Installing agent runtime dependencies"
-$STD bash /opt/azdo-agent/bin/installdependencies.sh
+bash /opt/azdo-agent/bin/installdependencies.sh >/dev/null 2>&1
 msg_ok "Installed agent runtime dependencies"
 
 echo "${RELEASE}" >/opt/azdo-agent_version.txt
 
 # ─── systemd unit ─────────────────────────────────────────────────────────────
 msg_info "Creating systemd unit"
-cat <<'EOF' >/etc/systemd/system/azdo-agent.service
+cat > /etc/systemd/system/azdo-agent.service <<'EOF'
 [Unit]
 Description=Azure DevOps Pipelines Agent
 After=network-online.target
@@ -105,7 +127,7 @@ msg_ok "Created systemd unit"
 
 # ─── Interactive setup helper ─────────────────────────────────────────────────
 msg_info "Creating azdo-agent-setup helper"
-cat <<'WRAPPER' >/usr/local/bin/azdo-agent-setup
+cat > /usr/local/bin/azdo-agent-setup <<'WRAPPER'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -117,27 +139,27 @@ echo -e "║       Azure DevOps Agent — Interactive Setup         ║"
 echo -e "╚══════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-read -rp "$(echo -e ${BOLD}"Organisation URL "${NC}"[https://dev.azure.com/myorg]: ")" AZP_URL
+read -rp "$(echo -e "${BOLD}Organisation URL ${NC}[https://dev.azure.com/myorg]: ")" AZP_URL
 while [[ -z "$AZP_URL" ]]; do
   echo -e "${YELLOW}Organisation URL is required.${NC}"
-  read -rp "$(echo -e ${BOLD}"Organisation URL: "${NC})" AZP_URL
+  read -rp "$(echo -e "${BOLD}Organisation URL: ${NC}")" AZP_URL
 done
 
-read -rsp "$(echo -e ${BOLD}"Personal Access Token (PAT): "${NC})" AZP_TOKEN
+read -rsp "$(echo -e "${BOLD}Personal Access Token (PAT): ${NC}")" AZP_TOKEN
 echo ""
 while [[ -z "$AZP_TOKEN" ]]; do
   echo -e "${YELLOW}PAT is required.${NC}"
-  read -rsp "$(echo -e ${BOLD}"Personal Access Token (PAT): "${NC})" AZP_TOKEN
+  read -rsp "$(echo -e "${BOLD}Personal Access Token (PAT): ${NC}")" AZP_TOKEN
   echo ""
 done
 
-read -rp "$(echo -e ${BOLD}"Agent pool name "${NC}"[Default]: ")" AZP_POOL
+read -rp "$(echo -e "${BOLD}Agent pool name ${NC}[Default]: ")" AZP_POOL
 AZP_POOL="${AZP_POOL:-Default}"
 
-read -rp "$(echo -e ${BOLD}"Agent name "${NC}"[$(hostname)]: ")" AZP_AGENT_NAME
+read -rp "$(echo -e "${BOLD}Agent name ${NC}[$(hostname)]: ")" AZP_AGENT_NAME
 AZP_AGENT_NAME="${AZP_AGENT_NAME:-$(hostname)}"
 
-read -rp "$(echo -e ${BOLD}"Work folder "${NC}"[_work]: ")" AZP_WORK
+read -rp "$(echo -e "${BOLD}Work folder ${NC}[_work]: ")" AZP_WORK
 AZP_WORK="${AZP_WORK:-_work}"
 
 echo ""
@@ -155,7 +177,7 @@ sudo -u azdo-agent /opt/azdo-agent/config.sh \
   --acceptTeeEula
 
 echo ""
-echo -e "${YELLOW}► Installing and starting systemd service...${NC}"
+echo -e "${YELLOW}► Installing and enabling systemd service...${NC}"
 pushd /opt/azdo-agent >/dev/null
 bash svc.sh install azdo-agent
 bash svc.sh start
@@ -176,7 +198,7 @@ chmod +x /usr/local/bin/azdo-agent-setup
 msg_ok "Created azdo-agent-setup helper"
 
 # ─── MOTD ─────────────────────────────────────────────────────────────────────
-cat <<'MOTD' >/etc/motd
+cat > /etc/motd <<'MOTD'
  _____                           ____             ___
 |  _  |___ _ _ ___ ___    ___  |    \ ___ _ _ __|   |___ ___
 |     |- _| | |  _| -_|  | . | |  |  | -_| | | . | . |_ -|
@@ -192,8 +214,5 @@ cat <<'MOTD' >/etc/motd
     • Pool name  (default: Default)
 
 MOTD
-
-motd_ssh
-customize
 
 msg_ok "Azure DevOps Agent v${RELEASE} installed successfully"
