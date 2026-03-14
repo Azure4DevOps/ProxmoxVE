@@ -5,7 +5,9 @@
 # License: MIT
 # Source: https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/linux-agent
 
-source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/install.func)
+# build.func exports FUNCTIONS_FILE_PATH with install.func content pre-loaded
+# This is the correct pattern - do NOT curl install.func manually
+source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 
 # ─── OS / package bootstrap ───────────────────────────────────────────────────
 color
