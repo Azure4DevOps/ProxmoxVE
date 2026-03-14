@@ -14,6 +14,10 @@ var_os="ubuntu"
 var_version="24.04"
 var_unprivileged="1"
 
+# ── Point this at the raw URL of YOUR install script once hosted on GitHub ────
+# Example: https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/install/azure-devops-agent-install.sh
+INSTALL_SCRIPT_URL="${INSTALL_SCRIPT_URL:-}"
+
 header_info "$APP"
 variables
 color
@@ -85,8 +89,8 @@ description
 msg_ok "Completed Successfully!\n"
 echo -e "${CREATING}${GN}${APP} setup has been successfully initialized!${CL}"
 echo -e "${INFO}${YW} Next step — configure the agent inside the container:${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}pct enter $(cat /tmp/CTID)${CL}"
-echo -e "${TAB}${GATEWAY}${BGN}sudo -u azdo-agent /opt/azdo-agent/config.sh${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}pct enter ${CTID}${CL}"
+echo -e "${TAB}${GATEWAY}${BGN}azdo-agent-setup${CL}"
 echo -e "${INFO}${YW} You will need:${CL}"
 echo -e "${TAB}- Azure DevOps organisation URL  (e.g. https://dev.azure.com/myorg)"
 echo -e "${TAB}- Personal Access Token (PAT) with 'Agent Pools (Read & Manage)' scope"
