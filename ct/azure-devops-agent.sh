@@ -5,9 +5,6 @@
 # License: MIT
 # Source: https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/linux-agent
 
-# ── Override the base URL so build.func fetches OUR install script ────────────
-COMMUNITY_SCRIPTS_URL="https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main"
-
 source <(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/build.func)
 
 APP="Azure DevOps Agent"
@@ -82,6 +79,65 @@ function update_script() {
 
   msg_ok "Updated Azure DevOps Agent to v${RELEASE}"
   exit
+}
+
+# ── Override build_container to use OUR install script ────────────────────────
+# build.func hardcodes the upstream URL; redefining the function after sourcing
+# redirects the final install step to our fork.
+build_container() {
+  if [ "${CT_TYPE}" == "1" ]; then
+    FEATURES="keyctl=1,nesting=1"
+  else
+    FEATURES="nesting=1"
+  fi
+  [[ "${ENABLE_FUSE:-no}" == "yes" ]] && FEATURES="${FEATURES},fuse=1"
+
+  TEMP_DIR=$(mktemp -d)
+  pushd "$TEMP_DIR" >/dev/null
+
+  export CTID="$CT_ID"
+  export CTTYPE="$CT_TYPE"
+  export PCT_OSTYPE="$var_os"
+  export PCT_OSVERSION="$var_version"
+  export PCT_DISK_SIZE="$DISK_SIZE"
+  export PCT_OPTIONS="
+    -features $FEATURES
+    -hostname $HN
+    -net0 name=eth0,bridge=$BRG${MAC:+,hwaddr=$MAC},ip=${NET}${GATE:+,gw=$GATE}${VLAN:+,tag=$VLAN}${MTU:+,mtu=$MTU}
+    -onboot 1
+    -cores $CORE_COUNT
+    -memory $RAM_SIZE
+    -unprivileged $CT_TYPE
+    $PWHASH
+  "
+
+  bash -c "$(curl -fsSL https://raw.githubusercontent.com/community-scripts/ProxmoxVE/main/misc/create_lxc.sh)" || exit 1
+  msg_ok "LXC Container $CT_ID was successfully created."
+
+  msg_info "Starting LXC Container"
+  pct start "$CTID"
+  msg_ok "Started LXC Container"
+
+  # Wait for network
+  msg_info "Waiting for network"
+  for i in $(seq 1 20); do
+    if pct exec "$CTID" -- ping -c1 -W2 8.8.8.8 &>/dev/null; then break; fi
+    sleep 3
+  done
+  msg_ok "Network in LXC is reachable"
+
+  msg_info "Customizing LXC Container"
+  pct exec "$CTID" -- bash -c "apt-get update -qq && apt-get install -y -qq curl wget sudo" >/dev/null 2>&1
+  msg_ok "Customized LXC Container"
+
+  # ── Run OUR self-contained install script inside the container ───────────────
+  msg_info "Running Azure DevOps Agent installer"
+  pct exec "$CTID" -- bash -c \
+    "$(curl -fsSL https://raw.githubusercontent.com/Azure4DevOps/ProxmoxVE/main/install/azure-devops-agent-install.sh)"
+  msg_ok "Azure DevOps Agent installer completed"
+
+  popd >/dev/null
+  rm -rf "$TEMP_DIR"
 }
 
 start
